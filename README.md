@@ -22,6 +22,11 @@ documentation. Omit `--contract` to check only the chain. The CLI prints JSON to
 stdout when all checks pass and exits with status 1 and a diagnostic on stderr
 when an endpoint check fails. Invalid CLI arguments exit with status 2.
 
+For a health check, add `--max-head-age 120` to reject an endpoint whose latest
+block is more than two minutes old. Choose a threshold that fits the chain's
+block interval and keep the machine's clock synchronized. Successful checks
+include the head's number, Unix timestamp, and age in seconds in the JSON output.
+
 ## Tests
 
 ```sh

@@ -5,6 +5,7 @@ import json
 import math
 import re
 import sys
+import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
@@ -60,7 +61,7 @@ def request_result(url, timeout, request_id, method, params):
     return result["result"]
 
 
-def check_endpoint(url, chain_id, genesis_hash, contract, timeout):
+def check_endpoint(url, chain_id, genesis_hash, contract, timeout, *, max_head_age=None):
     value = request_result(url, timeout, 1, "eth_chainId", [])
     if not isinstance(value, str) or not QUANTITY.fullmatch(value):
         raise CheckError("eth_chainId: expected a hexadecimal JSON-RPC quantity")
@@ -88,6 +89,28 @@ def check_endpoint(url, chain_id, genesis_hash, contract, timeout):
             raise CheckError(f"no deployed bytecode at {contract}")
         report["contract"] = contract
         report["contract_code_bytes"] = (len(code) - 2) // 2
+    if max_head_age is not None:
+        head = request_result(url, timeout, 4, "eth_getBlockByNumber", ["latest", False])
+        number = head.get("number") if isinstance(head, dict) else None
+        timestamp = head.get("timestamp") if isinstance(head, dict) else None
+        if not all(
+            isinstance(value, str) and QUANTITY.fullmatch(value)
+            for value in (number, timestamp)
+        ):
+            raise CheckError(
+                "eth_getBlockByNumber: expected a latest block number and timestamp"
+            )
+        timestamp_seconds = int(timestamp, 16)
+        age = int(time.time()) - timestamp_seconds
+        if age < 0:
+            raise CheckError("latest block timestamp is ahead of the local clock")
+        if age > max_head_age:
+            raise CheckError(f"latest block is {age}s old (maximum {max_head_age}s)")
+        report["head"] = {
+            "number": int(number, 16),
+            "timestamp": timestamp_seconds,
+            "age_seconds": age,
+        }
     return report
 
 
@@ -97,6 +120,10 @@ def main(argv=None):
     parser.add_argument("--chain-id", required=True, type=int, help="expected decimal chain ID")
     parser.add_argument("--genesis", required=True, help="expected block-zero hash")
     parser.add_argument("--contract", help="optional address expected to have bytecode")
+    parser.add_argument(
+        "--max-head-age", type=int, metavar="SECONDS",
+        help="fail if the latest block is older than this many seconds",
+    )
     parser.add_argument("--timeout", type=float, default=10, help="socket timeout in seconds")
     args = parser.parse_args(argv)
 
@@ -112,12 +139,15 @@ def main(argv=None):
         parser.error("--genesis must be a 0x-prefixed 32-byte hash")
     if args.contract is not None and not ADDRESS.fullmatch(args.contract):
         parser.error("--contract must be a 0x-prefixed 20-byte address")
+    if args.max_head_age is not None and args.max_head_age <= 0:
+        parser.error("--max-head-age must be a positive number of seconds")
     if not math.isfinite(args.timeout) or args.timeout <= 0:
         parser.error("--timeout must be a positive number")
 
     try:
         result = check_endpoint(
-            args.rpc, args.chain_id, args.genesis, args.contract, args.timeout
+            args.rpc, args.chain_id, args.genesis, args.contract, args.timeout,
+            max_head_age=args.max_head_age,
         )
     except CheckError as error:
         print(error, file=sys.stderr)

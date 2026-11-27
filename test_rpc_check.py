@@ -62,6 +62,38 @@ class EndpointChecks(unittest.TestCase):
         with self.assertRaisesRegex(CheckError, "unexpected genesis hash"):
             check_endpoint(URL, 4221, GENESIS, None, 5)
 
+    @patch("rpc_check.time.time", return_value=1_000)
+    @patch("rpc_check.urlopen")
+    def test_reports_latest_block_at_the_age_limit(self, urlopen, clock):
+        urlopen.side_effect = [
+            response(1, "0x107d"),
+            response(2, {"number": "0x0", "hash": GENESIS}),
+            response(4, {"number": "0x2a", "timestamp": hex(940)}),
+        ]
+        report = check_endpoint(URL, 4221, GENESIS, None, 5, max_head_age=60)
+        self.assertEqual(report["head"], {"number": 42, "timestamp": 940, "age_seconds": 60})
+        last_call = json.loads(urlopen.call_args.args[0].data)
+        self.assertEqual(last_call["method"], "eth_getBlockByNumber")
+        self.assertEqual(last_call["params"], ["latest", False])
+
+    @patch("rpc_check.time.time", return_value=1_000)
+    @patch("rpc_check.urlopen")
+    def test_rejects_old_future_and_malformed_heads(self, urlopen, clock):
+        for head, message in [
+            ({"number": "0x2a", "timestamp": hex(939)}, "latest block is 61s old"),
+            ({"number": "0x2a", "timestamp": hex(1_001)}, "ahead of the local clock"),
+            ({"number": "0x2a", "timestamp": "0x03ac"}, "expected a latest block"),
+            (None, "expected a latest block"),
+        ]:
+            with self.subTest(head=head):
+                urlopen.side_effect = [
+                    response(1, "0x107d"),
+                    response(2, {"number": "0x0", "hash": GENESIS}),
+                    response(4, head),
+                ]
+                with self.assertRaisesRegex(CheckError, message):
+                    check_endpoint(URL, 4221, GENESIS, None, 5, max_head_age=60)
+
     @patch("rpc_check.urlopen")
     def test_rejects_address_without_bytecode(self, urlopen):
         urlopen.side_effect = [

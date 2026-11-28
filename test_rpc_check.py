@@ -1,10 +1,12 @@
 import io
 import json
 import unittest
+from contextlib import redirect_stderr
+from http.client import BadStatusLine
 from urllib.error import URLError
 from unittest.mock import patch
 
-from rpc_check import CheckError, check_endpoint, request_result
+from rpc_check import CheckError, check_endpoint, main, request_result
 
 
 URL = "https://rpc.example.invalid"
@@ -96,6 +98,27 @@ class EndpointChecks(unittest.TestCase):
     def test_reports_connection_failure(self, urlopen):
         with self.assertRaisesRegex(CheckError, "could not read"):
             request_result(URL, 5, 1, "eth_chainId", [])
+
+    @patch("rpc_check.urlopen", side_effect=BadStatusLine("fixture invalid status line"))
+    def test_reports_http_framing_failure(self, urlopen):
+        with self.assertRaisesRegex(CheckError, "could not read the endpoint response"):
+            request_result(URL, 5, 1, "eth_chainId", [])
+
+    @patch("rpc_check.urlopen", side_effect=URLError("unexpected network request"))
+    def test_rejects_invalid_rpc_ports_before_connecting(self, urlopen):
+        for port in ("not-a-port", "65536", "0"):
+            with self.subTest(port=port):
+                args = [
+                    "--rpc", f"https://rpc.example.invalid:{port}",
+                    "--chain-id", "4221",
+                    "--genesis", GENESIS,
+                ]
+                stderr = io.StringIO()
+                with redirect_stderr(stderr), self.assertRaises(SystemExit) as exit_info:
+                    main(args)
+                self.assertEqual(exit_info.exception.code, 2)
+                self.assertIn("--rpc", stderr.getvalue())
+        urlopen.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -5,7 +5,8 @@ import json
 import math
 import re
 import sys
-from urllib.error import HTTPError, URLError
+from http.client import HTTPException
+from urllib.error import HTTPError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
@@ -32,7 +33,7 @@ def request_result(url, timeout, request_id, method, params):
             payload = response.read(MAX_RESPONSE_BYTES + 1)
     except HTTPError as error:
         raise CheckError(f"{method}: HTTP {error.code}") from error
-    except (URLError, OSError) as error:
+    except (HTTPException, OSError) as error:
         raise CheckError(f"{method}: could not read the endpoint response") from error
 
     if len(payload) > MAX_RESPONSE_BYTES:
@@ -102,8 +103,11 @@ def main(argv=None):
 
     try:
         url = urlsplit(args.rpc)
+        port = url.port
     except ValueError:
-        parser.error("--rpc must be an HTTP(S) URL")
+        parser.error("--rpc must be a valid HTTP(S) URL")
+    if port == 0:
+        parser.error("--rpc port must be between 1 and 65535")
     if url.scheme not in {"http", "https"} or not url.hostname or url.username is not None:
         parser.error("--rpc must be an HTTP(S) URL without embedded credentials")
     if args.chain_id < 0:
